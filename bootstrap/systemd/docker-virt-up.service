@@ -1,0 +1,11 @@
+[Unit]
+Description=docker bridge
+After=docker.service
+Requires=docker.service
+
+[Service]
+Restart=on-failure
+RestartSec=3
+RemainAfterExit=true
+ExecStartPre=-/usr/bin/docker network rm virt
+ExecStart=/usr/bin/docker network create -d bridge --gateway 192.168.1.1 --subnet=192.168.1.0/24 -o "com.docker.network.bridge.name=virt" virt

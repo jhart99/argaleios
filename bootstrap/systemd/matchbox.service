@@ -1,0 +1,15 @@
+[Unit]
+Description=Matchbox
+After=docker-virt-up.service
+Requires=docker-virt-up.service
+
+[Service]
+Restart=always
+RestartSec=3s
+ExecStartPre=-/usr/bin/docker kill matchbox
+ExecStartPre=-/usr/bin/docker rm matchbox
+ExecStartPre=/usr/bin/docker pull quay.io/coreos/matchbox:latest
+ExecStart=/usr/bin/docker run --name=matchbox -p 8080:8080 --rm -v /etc/matchbox/matchbox:/var/lib/matchbox:Z quay.io/coreos/matchbox:latest --address=0.0.0.0:8080 -log-level=debug
+
+[Install]
+WantedBy=multi-user.target

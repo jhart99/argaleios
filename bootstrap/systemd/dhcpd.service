@@ -1,0 +1,18 @@
+[Unit]
+Description=dhcpd
+After=docker.service
+Requires=docker.service
+After=bind.service
+After=docker-virt-up.service
+
+[Service]
+Restart=always
+RestartSec=3s
+Environment='DHCPDARGS=virt enp13s0.10 enp13s0.20'
+ExecStartPre=-/usr/bin/docker kill dhcpd
+ExecStartPre=-/usr/bin/docker rm dhcpd
+ExecStartPre=/usr/bin/docker pull networkboot/dhcpd
+ExecStart=/usr/bin/docker run --name=dhcpd --rm --network=host --cap-add=NET_ADMIN -v /etc/matchbox/dhcp:/data --dns=192.168.1.10 networkboot/dhcpd
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=haproxy k8s
+After=docker-virt-up.service
+Requires=docker-virt-up.service
+
+[Service]
+Restart=always
+RestartSec=3s
+ExecStartPre=-/usr/bin/docker kill haproxy
+ExecStartPre=-/usr/bin/docker rm haproxy
+ExecStartPre=/usr/bin/docker pull haproxy
+ExecStart=/usr/bin/docker run --name=haproxy --rm --network=virt --ip=192.168.1.8 -p 6443:443 -v /dev/log:/dev/log -v /etc/matchbox/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg haproxy
+
