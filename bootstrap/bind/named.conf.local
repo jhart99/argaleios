@@ -1,0 +1,26 @@
+    zone "foo" IN {
+        type master;
+        file "/etc/bind/zones/foo.db";
+        allow-transfer { 192.168.1.1; 10.0.0.0; localhost; };
+    };
+    zone "vogt.local" IN {
+        type master;
+        file "/etc/bind/zones/vogt.local.db";
+        allow-transfer { 192.168.1.1; 10.0.0.0; localhost; };
+    };
+    zone "1.168.192.in-addr.arpa" {
+        type master;
+        file "/etc/bind/zones/rev.1.168.192.in-addr.arpa";
+    };
+    zone "2.168.192.in-addr.arpa" {
+        type master;
+        file "/etc/bind/zones/rev.2.168.192.in-addr.arpa";
+    };
+    zone "10.168.192.in-addr.arpa" {
+        type master;
+        file "/etc/bind/zones/rev.10.168.192.in-addr.arpa";
+    };
+    zone "20.168.192.in-addr.arpa" {
+        type master;
+        file "/etc/bind/zones/rev.20.168.192.in-addr.arpa";
+    };

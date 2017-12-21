@@ -1,0 +1,27 @@
+acl goodclients {
+    192.168.0.0/16;
+    10.0.0.0/8;
+    localhost;
+    localnets;
+    137.131.92.0/24;
+};
+options {
+    directory "/var/";
+    recursion yes;
+    allow-query { goodclients; } ;
+    dnssec-enable yes;
+	dnssec-validation yes;
+	auth-nxdomain no;    # conform to RFC1035
+	listen-on-v6 { none; };
+    version "get lost";
+
+    forwarders {
+        208.67.220.220 port 443;
+        208.67.220.220 port 5353;
+        208.67.222.222 port 443;
+        208.67.222.222 port 5353;
+        #137.131.40.9;
+        #137.131.40.10;
+    };
+    forward only;
+};

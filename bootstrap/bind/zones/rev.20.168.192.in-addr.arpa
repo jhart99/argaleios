@@ -1,0 +1,25 @@
+; IP Address-to-Host DNS Pointers for the 192.168.1 subnet
+@ IN SOA vogt1005.vogt.local. hostmaster.vogt.local. (
+    2008080901 ; serial
+    8H ; refresh
+    4H ; Cretry
+    4W ; expire
+    1D ; minimum
+)
+; define the authoritative name server
+          IN NS vogt1005.vogt.local.
+; our hosts, in numeric order
+2        IN PTR nfs.ipmi.vogt.local.
+3        IN PTR home.ipmi.vogt.local.
+4        IN PTR pdu.ipmi.vogt.local.
+7        IN PTR ingress1.ipmi.vogt.local.
+8        IN PTR ingress2.ipmi.vogt.local.
+9        IN PTR ingress3.ipmi.vogt.local.
+$GENERATE 20-239 $ PTR mgmt${0,3,d}.vogt.local.
+240       IN PTR switch1.ipmi.vogt.local.
+241       IN PTR switch2.ipmi.vogt.local.
+250       IN PTR controller5.ipmi.vogt.local.
+251       IN PTR controller4.ipmi.vogt.local.
+252       IN PTR controller3.ipmi.vogt.local.
+253       IN PTR controller2.ipmi.vogt.local.
+254       IN PTR controller1.ipmi.vogt.local.

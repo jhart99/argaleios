@@ -1,0 +1,42 @@
+$ORIGIN .
+$TTL 86400      ; 1 day
+vogt.local. IN SOA vogt1005.vogt.local. hostmaster.vogt.local. (
+    2008080901 ; serial
+    8H ; refresh
+    4H ; retry
+    4W ; expire
+    1D ; minimum
+)
+vogt.local. IN NS vogt1005.vogt.local.
+vogt.local. IN MX 10 vogt1005.vogt.local.
+$ORIGIN vogt.local.
+localhost    IN A 127.0.0.1
+; Set the hostnames in alphabetical order
+vogt1005    IN A 192.168.1.1
+ca          IN A 192.168.1.1
+nfs         IN A 192.168.10.2
+home        IN A 192.168.10.3
+ingress1    IN A 192.168.10.7
+ingress2    IN A 192.168.10.8
+ingress3    IN A 192.168.10.9
+controller5 IN A 192.168.10.250
+controller4 IN A 192.168.10.251
+controller3 IN A 192.168.10.252
+controller2 IN A 192.168.10.253
+controller1 IN A 192.168.10.254
+$GENERATE 20-240 node${0,3,d} A 192.168.10.$
+$ORIGIN ipmi.vogt.local.
+nfs         IN A 192.168.20.2
+home        IN A 192.168.20.3
+pdu         IN A 192.168.20.4
+ingress1    IN A 192.168.20.7
+ingress2    IN A 192.168.20.8
+ingress3    IN A 192.168.20.9
+switch1     IN A 192.168.20.240
+switch2     IN A 192.168.20.241
+$GENERATE 20-239 mgmt${0,3,d} A 192.168.20.$
+controller5 IN A 192.168.20.250
+controller4 IN A 192.168.20.251
+controller3 IN A 192.168.20.252
+controller2 IN A 192.168.20.253
+controller1 IN A 192.168.20.254

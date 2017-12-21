@@ -1,0 +1,16 @@
+$ORIGIN .
+$TTL 86400      ; 1 day
+foo. IN SOA boot.foo. hostmaster.foo. (
+
+    2008080901 ; serial
+    8H ; refresh
+    4H ; retry
+    4W ; expire
+    1D ; minimum
+)
+foo. IN NS boot.foo.
+foo. IN MX 10 mail.foo.
+$ORIGIN foo.
+localhost    IN A 127.0.0.1
+boot         IN A 192.168.1.1
+matchbox     IN A 192.168.1.1
