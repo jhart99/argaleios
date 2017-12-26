@@ -1,0 +1,16 @@
+{
+  "id": "etcd3-ingress",
+  "name": "etcd3-ingress",
+  "boot": {
+    "kernel": "/assets/coreos/1576.4.0/coreos_production_pxe.vmlinuz",
+    "initrd": ["/assets/coreos/1576.4.0/coreos_production_pxe_image.cpio.gz"],
+    "args": [
+      "coreos.config.url=http://matchbox.foo:8080/ignition?uuid=${uuid}&mac=${mac:hexhyp}",
+      "coreos.first_boot=yes",
+      "console=tty0",
+      "console=ttyS0",
+      "coreos.autologin"
+    ]
+  },
+  "ignition_id": "etcd3-ingress.yaml"
+}

@@ -1,0 +1,939 @@
+---
+systemd:
+  units:
+    - name: nfs-client.target
+      enable: true
+      dropins:
+          - name: 00-nfs.conf
+            contents: |
+                [Unit]
+                Wants=rpc-statd.service
+    - name: etcd-member.service
+      enable: true
+      dropins:
+        - name: 40-etcd-cluster.conf
+          contents: |
+            [Unit]
+            Wants=etcd-assets.target
+            [Service]
+            Environment="ETCD_IMAGE_TAG=v3.2.5"
+            Environment="ETCD_NAME={{.etcd_name}}"
+            Environment="ETCD_ADVERTISE_CLIENT_URLS=https://{{.domain_name}}:2379"
+            Environment="ETCD_INITIAL_ADVERTISE_PEER_URLS=https://{{.domain_name}}:2380"
+            Environment="ETCD_LISTEN_CLIENT_URLS=https://0.0.0.0:2379"
+            Environment="ETCD_LISTEN_PEER_URLS=https://0.0.0.0:2380"
+            Environment="ETCD_INITIAL_CLUSTER={{.etcd_initial_cluster}}"
+            Environment="ETCD_CERT_FILE=/etc/ssl/certs/etcd-server.pem"
+            Environment="ETCD_KEY_FILE=/etc/ssl/certs/etcd-server-key.pem"
+            Environment="ETCD_TRUSTED_CA_FILE=/etc/ssl/certs/etcd-ca.pem"
+            Environment="ETCD_CLIENT_CERT_AUTH=true"
+            Environment="ETCD_PEER_CERT_FILE=/etc/ssl/certs/etcd-peer.pem"
+            Environment="ETCD_PEER_KEY_FILE=/etc/ssl/certs/etcd-peer-key.pem"
+            Environment="ETCD_PEER_TRUSTED_CA_FILE=/etc/ssl/certs/etcd-ca.pem"
+            Environment="ETCD_PEER_CLIENT_CERT_AUTH=true"
+            Environment="ETCD_SSL_DIR=/etc/ssl/etcd"
+            Environment="ETCD_STRICT_RECONFIG_CHECK=true"
+            Restart=always
+            RestartSec=3
+    - name: flanneld.service
+      enable: true
+      dropins:
+          - name: 40-ExecStartPre-symlink.conf
+            contents: |
+              [Service]
+              EnvironmentFile=-/etc/flannel/options.env
+              ExecStartPre=/bin/bash -c "until /usr/bin/etcdctl set /coreos.com/network/config '{ \"Network\": \"{{.k8s_pod_network}}\", \"Backend\": {\"Type\": \"vxlan\"}}'; do sleep 1; done"
+    - name: docker.service
+      dropins:
+        - name: 40-flannel.conf
+          contents: |
+            [Unit]
+            Requires=flanneld.service
+            After=flanneld.service
+            [Service]
+            EnvironmentFile=/etc/kubernetes/cni/docker_opts_cni.env
+    - name: locksmithd.service
+      dropins:
+        - name: 40-etcd-lock.conf
+          contents: |
+            [Service]
+            Environment="REBOOT_STRATEGY=etcd-lock"
+        - name: 10-etcd-tls.conf
+          contents: |
+            [Service]
+            Environment="LOCKSMITHD_ETCD_CAFILE=/etc/ssl/etcd/etcd-ca.pem"
+            Environment="LOCKSMITHD_ETCD_CERTFILE=/etc/ssl/etcd/etcd-peer.pem"
+            Environment="LOCKSMITHD_ETCD_KEYFILE=/etc/ssl/etcd/etcd-peer-key.pem"
+            Environment="LOCKSMITHD_ENDPOINT={{.etcd_endpoints}}"
+    - name: fleet.service
+      enable: true
+      dropins:
+        - name: 10-etcd-tls.conf
+          contents: |
+            [Unit]
+            After=etcd-member.service
+            Wants=fleet-assets.target
+            After=fleet-assets.target
+            [Service]
+            Environment="FLEET_ETCD_CAFILE=/etc/ssl/fleet/etcd-ca.pem"
+            Environment="FLEET_ETCD_CERTFILE=/etc/ssl/fleet/client.pem"
+            Environment="FLEET_ETCD_KEYFILE=/etc/ssl/fleet/client-key.pem"
+            Environment="FLEET_ETCD_SERVERS={{.etcd_endpoints}}"
+        - name: 20-metadata.conf
+          contents: |
+            [Service]
+            Environment="FLEET_METADATA=hostname={{.etcd_name}}"
+    - name: kubelet.service
+      enable: true
+      contents: |
+        [Unit]
+        Description=Kubelet via Hyperkube ACI
+        Wants=flanneld.service
+        Requires=k8s-assets.target
+        After=k8s-assets.target
+        [Service]
+        Environment=KUBELET_IMAGE_TAG=v1.9.0_coreos.0
+        Environment="RKT_OPTS=--uuid-file-save=/var/run/kubelet-pod.uuid \
+          --volume dns,kind=host,source=/etc/resolv.conf \
+          --mount volume=dns,target=/etc/resolv.conf \
+          {{ if eq .container_runtime "rkt" -}}
+          --volume rkt,kind=host,source=/opt/bin/host-rkt \
+          --mount volume=rkt,target=/usr/bin/rkt \
+          --volume var-lib-rkt,kind=host,source=/var/lib/rkt \
+          --mount volume=var-lib-rkt,target=/var/lib/rkt \
+          --volume stage,kind=host,source=/tmp \
+          --mount volume=stage,target=/tmp \
+          {{ end -}}
+          --volume var-log,kind=host,source=/var/log \
+          --mount volume=var-log,target=/var/log"
+        ExecStartPre=/usr/bin/mkdir -p /etc/kubernetes/manifests
+        ExecStartPre=/usr/bin/mkdir -p /var/log/containers
+        ExecStartPre=/usr/bin/systemctl is-active flanneld.service
+        ExecStartPre=-/usr/bin/rkt rm --uuid-file=/var/run/kubelet-pod.uuid
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/kubernetes/kubeconfig ] || curl -s -L http://matchbox.foo:8080/assets/worker.kubeconfig | sed s/XXX/$(/usr/bin/hostname)/ > /etc/kubernetes/kubeconfig"
+        ExecStartPre=/usr/bin/bash -c '[ -f /etc/kubernetes/proxy.kubeconfig ] || curl -s -L -o /etc/kubernetes/proxy.kubeconfig http://matchbox.foo:8080/assets/proxy.kubeconfig'
+        ExecStartPre=/usr/bin/mkdir -p /etc/kubernetes/ssl
+        ExecStartPre=/usr/bin/bash -c "/usr/bin/cp /etc/ssl/k8s/* /etc/kubernetes/ssl"
+        ExecStart=/usr/lib/coreos/kubelet-wrapper \
+          --allow-privileged=true \
+          --cluster_dns={{.k8s_dns_service_ip}} \
+          --cluster_domain=cluster.local \
+          --cni-conf-dir=/etc/kubernetes/cni/net.d \
+          --container-runtime={{.container_runtime}} \
+          --kubeconfig=/etc/kubernetes/kubeconfig \
+          --network-plugin=cni \
+          --pod-manifest-path=/etc/kubernetes/manifests \
+          --register-node=true \
+          --rkt-path=/usr/bin/rkt \
+          --rkt-stage1-image=coreos.com/rkt/stage1-coreos \
+          --tls-cert-file=/etc/kubernetes/ssl/peer.pem \
+          --tls-private-key-file=/etc/kubernetes/ssl/peer-key.pem \
+          --v=2
+        ExecStop=-/usr/bin/rkt stop --uuid-file=/var/run/kubelet-pod.uuid
+        Restart=always
+        RestartSec=10
+        [Install]
+        WantedBy=multi-user.target
+    - name: cfssl.service
+      contents: |
+        [Unit]
+        Description=Fetch cfssl and cfssljson
+        [Service]
+        ExecStartPre=/usr/bin/bash -c "[ -d /opt ] || mkdir /opt"
+        ExecStartPre=/usr/bin/bash -c "[ -f /opt/cfssl ] || curl -s -L -o /opt/cfssl https://pkg.cfssl.org/R1.2/cfssl_linux-amd64"
+        ExecStartPre=/usr/bin/bash -c "[ -f /opt/cfssljson ] || curl -s -L -o /opt/cfssljson https://pkg.cfssl.org/R1.2/cfssljson_linux-amd64"
+        ExecStart=/usr/bin/chmod +x /opt/cfssl /opt/cfssljson
+        Restart=on-failure
+        RestartSec=3
+    - name: etcd-gen@.service
+      contents: |
+        [Unit]
+        Description=Generate Certs and Keys
+        [Service]
+        ExecStartPre=/usr/bin/bash -c "[ -d /etc/ssl/etcd/ ] || mkdir /etc/ssl/etcd/"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/etcd/etcd-ca.pem ] || curl -s -L -o /etc/ssl/etcd/etcd-ca.pem http://matchbox.foo:8080/assets/tls/etcd-ca2.pem"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/etcd/%i.json ] || curl -s -L -o /etc/ssl/etcd/%i.json http://matchbox.foo:8080/assets/tls/%i.json"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/etcd/%i.pem ] || /opt/cfssl gencert -hostname \"{{.etcd_name}},{{.domain_name}},$(/usr/bin/host {{.domain_name}} | /usr/bin/awk '{print $4}'),127.0.0.1\" -profile %i -remote ca.vogt.local:8888 /etc/ssl/etcd/%i.json | /opt/cfssljson -bare /etc/ssl/etcd/%i"
+        ExecStartPre=/bin/chown -R etcd:etcd /etc/ssl/etcd
+        ExecStart=/bin/chmod 600 /etc/ssl/etcd/%i-key.pem
+        Restart=on-failure
+        RestartSec=3
+    - name: fleet-gen@.service
+      contents: |
+        [Unit]
+        Description=Generate Certs and Keys
+        [Service]
+        ExecStartPre=/usr/bin/bash -c "[ -d /etc/ssl/fleet/ ] || mkdir /etc/ssl/fleet/"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/fleet/etcd-ca.pem ] || curl -s -L -o /etc/ssl/fleet/etcd-ca.pem http://matchbox.foo:8080/assets/tls/etcd-ca2.pem"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/fleet/%i.json ] || curl -s -L -o /etc/ssl/fleet/%i.json http://matchbox.foo:8080/assets/tls/%i.json"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/fleet/%i.pem ] || /opt/cfssl gencert -hostname \"{{.etcd_name}},{{.domain_name}},$(/usr/bin/host {{.domain_name}} | /usr/bin/awk '{print $4}'),127.0.0.1\" -profile %i -remote ca.vogt.local:8888 /etc/ssl/fleet/%i.json | /opt/cfssljson -bare /etc/ssl/fleet/%i"
+        ExecStartPre=/bin/chown -R fleet:fleet /etc/ssl/fleet
+        ExecStart=/bin/chmod 600 /etc/ssl/fleet/%i-key.pem
+        Restart=on-failure
+        RestartSec=3
+    - name: k8s-gen@.service
+      contents: |
+        [Unit]
+        Description=Generate Certs and Keys
+        Wants=network-functioning.service
+        After=network-functioning.service
+        [Service]
+        ExecStartPre=/usr/bin/bash -c "[ -d /etc/ssl/k8s/ ] || mkdir /etc/ssl/k8s/"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/k8s/k8s-ca.pem ] || curl -s -L -o /etc/ssl/k8s/k8s-ca.pem http://matchbox.foo:8080/assets/tls/k8s-ca2.pem"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/k8s/%i.json ] || curl -s -L -o /etc/ssl/k8s/%i.json http://matchbox.foo:8080/assets/tls/%i.json && sed -i s/XXX/$(/usr/bin/hostname)/ /etc/ssl/k8s/%i.json"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/k8s/%i.pem ] || /opt/cfssl gencert -hostname \"{{.etcd_name}},{{.domain_name}},$(/usr/bin/host {{.domain_name}} | /usr/bin/awk '{print $4}'),127.0.0.1,kubernetes.default,kubernetes.default.svc,kubernetes.default.svc.cluster.local,10.3.0.1,vogt1005.scripps.edu,137.131.92.171,137.131.92.217,137.131.92.221,137.131.92.223,rnatr.com\" -profile %i -remote ca.vogt.local:8889 /etc/ssl/k8s/%i.json | /opt/cfssljson -bare /etc/ssl/k8s/%i"
+        ExecStart=/bin/chmod 600 /etc/ssl/k8s/%i-key.pem
+        Restart=on-failure
+        RestartSec=3
+    - name: k8s-assets.target
+      contents: |
+        [Unit]
+        Description=Generate etcd certs and secrets
+        Wants=cfssl.service
+        Wants=k8s-gen@peer.service
+    - name: etcd-assets.target
+      contents: |
+        [Unit]
+        Description=Generate etcd certs and secrets
+        Wants=cfssl.service
+        Wants=etcd-gen@etcd-server.service
+        Wants=etcd-gen@etcd-peer.service
+    - name: fleet-assets.target
+      contents: |
+        [Unit]
+        Description=Generate etcd certs and secrets
+        Wants=cfssl.service
+        Wants=fleet-gen@client.service
+    - name: k8s-addons.service
+      enable: true
+      contents: |
+        [Unit]
+        Description=Kubernetes Addons
+        [Service]
+        Type=oneshot
+        ExecStart=/opt/k8s-addons
+        [Install]
+        WantedBy=multi-user.target
+
+
+storage:
+  {{ if index . "pxe" }}
+  disks:
+    - device: /dev/sda
+      wipe_table: true
+      partitions:
+        - label: ROOT
+  filesystems:
+    - name: root
+      mount:
+        device: "/dev/sda1"
+        format: "ext4"
+        create:
+          force: true
+          options:
+            - "-LROOT"
+  {{ end }}
+  files:
+    - path: /etc/hostname
+      filesystem: root
+      mode: 0644
+      contents:
+          inline:
+              {{.domain_name}}
+    - path: /etc/kubernetes/cni/net.d/10-flannel.conf
+      filesystem: root
+      contents:
+        inline: |
+          {
+              "name": "podnet",
+              "type": "flannel",
+              "delegate": {
+                  "isDefaultGateway": true
+              }
+          }
+    - path: /etc/kubernetes/cni/docker_opts_cni.env
+      filesystem: root
+      contents:
+        inline: |
+          DOCKER_OPT_BIP=""
+          DOCKER_OPT_IPMASQ=""
+    - path: /etc/sysctl.d/max-user-watches.conf
+      filesystem: root
+      contents:
+        inline: |
+          fs.inotify.max_user_watches=16184
+    - path: /etc/flannel/options.env
+      filesystem: root
+      contents:
+        inline: |
+          ETCDCTL_CA_FILE=/etc/ssl/etcd/etcd-ca.pem
+          ETCDCTL_CERT_FILE=/etc/ssl/etcd/etcd-peer.pem
+          ETCDCTL_KEY_FILE=/etc/ssl/etcd/etcd-peer-key.pem
+          ETCDCTL_ENDPOINTS={{.etcd_endpoints}}
+          FLANNELD_ETCD_ENDPOINTS={{.etcd_endpoints}}
+          FLANNELD_ETCD_CAFILE=/etc/ssl/etcd/etcd-ca.pem
+          FLANNELD_ETCD_CERTFILE=/etc/ssl/etcd/etcd-peer.pem
+          FLANNELD_ETCD_KEYFILE=/etc/ssl/etcd/etcd-peer-key.pem
+    - path: /etc/kubernetes/manifests/kube-apiserver.yaml
+      filesystem: root
+      contents:
+        inline: |
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: kube-apiserver
+            namespace: kube-system
+          spec:
+            hostNetwork: true
+            containers:
+            - name: kube-apiserver
+              image: quay.io/coreos/hyperkube:v1.9.0_coreos.0
+              command:
+              - /hyperkube
+              - apiserver
+              - --admission-control=NamespaceLifecycle,LimitRanger,ServiceAccount,DefaultStorageClass,ResourceQuota
+              - --allow-privileged=true
+              - --anonymous-auth=false
+              - --apiserver-count=5
+              - --audit-log-maxage=3
+              - --audit-log-maxbackup=30
+              - --audit-log-maxsize=100
+              - --audit-log-path=/var/lib/audit.log
+              - --authorization-mode=Node,RBAC
+              - --client-ca-file=/etc/kubernetes/ssl/k8s-ca.pem
+              - --enable-swagger-ui=true
+              - --etcd-cafile=/etc/ssl/etcd/etcd-ca.pem
+              - --etcd-certfile=/etc/ssl/etcd/etcd-peer.pem
+              - --etcd-keyfile=/etc/ssl/etcd/etcd-peer-key.pem
+              - --etcd-servers={{.etcd_endpoints}}
+              - --event-ttl=1h
+              - --kubelet-certificate-authority=/etc/kubernetes/ssl/k8s-ca.pem
+              - --kubelet-client-certificate=/etc/kubernetes/ssl/peer.pem
+              - --kubelet-client-key=/etc/kubernetes/ssl/peer-key.pem
+              - --kubelet-https=true
+              - --runtime-config=rbac.authorization.k8s.io/v1alpha1
+              - --secure-port=443
+              - --service-account-key-file=/etc/kubernetes/ssl/peer-key.pem
+              - --service-cluster-ip-range={{.k8s_service_ip_range}}
+              - --service-node-port-range=30000-32767
+              - --tls-cert-file=/etc/kubernetes/ssl/peer.pem
+              - --tls-private-key-file=/etc/kubernetes/ssl/peer-key.pem
+              - --v=2
+              livenessProbe:
+                httpGet:
+                  host: 127.0.0.1
+                  port: 8080
+                  path: /healthz
+                initialDelaySeconds: 15
+                timeoutSeconds: 15
+              ports:
+              - containerPort: 443
+                hostPort: 443
+                name: https
+              - containerPort: 8080
+                hostPort: 8080
+                name: local
+              volumeMounts:
+              - mountPath: /etc/ssl/etcd
+                name: ssl-certs-etcd
+                readOnly: true
+              - mountPath: /etc/kubernetes/ssl
+                name: ssl-certs-kubernetes
+                readOnly: true
+              - mountPath: /etc/ssl/certs
+                name: ssl-certs-host
+                readOnly: true
+            volumes:
+            - hostPath:
+                path: /etc/ssl/k8s
+              name: ssl-certs-kubernetes
+            - hostPath:
+                path: /etc/ssl/etcd
+              name: ssl-certs-etcd
+            - hostPath:
+                path: /usr/share/ca-certificates
+              name: ssl-certs-host
+    - path: /etc/kubernetes/manifests/kube-scheduler.yaml
+      filesystem: root
+      contents:
+        inline: |
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: kube-scheduler
+            namespace: kube-system
+          spec:
+            hostNetwork: true
+            containers:
+            - name: kube-scheduler
+              image: quay.io/coreos/hyperkube:v1.9.0_coreos.0
+              command:
+              - /hyperkube
+              - scheduler
+              - --leader-elect=true
+              - --master=http://127.0.0.1:8080
+              - --v=2
+              resources:
+                requests:
+                  cpu: 100m
+              livenessProbe:
+                httpGet:
+                  host: 127.0.0.1
+                  path: /healthz
+                  port: 10251
+                initialDelaySeconds: 15
+                timeoutSeconds: 15
+    - path: /etc/kubernetes/manifests/kube-controller-manager.yaml
+      filesystem: root
+      contents:
+        inline: |
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: kube-controller-manager
+            namespace: kube-system
+          spec:
+            containers:
+            - name: kube-controller-manager
+              image: quay.io/coreos/hyperkube:v1.9.0_coreos.0
+              command:
+              - /hyperkube
+              - controller-manager
+              - --address=0.0.0.0
+              - --allocate-node-cidrs=true
+              - --cluster-cidr={{.k8s_pod_network}}
+              - --cluster-name=kubernetes
+              - --cluster-signing-cert-file=/etc/kubernetes/ssl/peer.pem
+              - --cluster-signing-key-file=/etc/kubernetes/ssl/peer-key.pem
+              - --leader-elect=true
+              - --master=http://127.0.0.1:8080
+              - --root-ca-file=/etc/kubernetes/ssl/k8s-ca.pem
+              - --service-account-private-key-file=/etc/kubernetes/ssl/peer-key.pem
+              - --service-cluster-ip-range={{.k8s_service_ip_range}}
+              - --v=2
+              resources:
+                requests:
+                  cpu: 200m
+              livenessProbe:
+                httpGet:
+                  host: 127.0.0.1
+                  path: /healthz
+                  port: 10252
+                initialDelaySeconds: 15
+                timeoutSeconds: 15
+              volumeMounts:
+              - mountPath: /etc/kubernetes/ssl
+                name: ssl-certs-kubernetes
+                readOnly: true
+              - mountPath: /etc/ssl/certs
+                name: ssl-certs-host
+                readOnly: true
+            hostNetwork: true
+            volumes:
+            - hostPath:
+                path: /etc/ssl/k8s
+              name: ssl-certs-kubernetes
+            - hostPath:
+                path: /usr/share/ca-certificates
+              name: ssl-certs-host
+
+    - path: /etc/kubernetes/manifests/kube-proxy.yaml
+      filesystem: root
+      contents:
+        inline: |
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: kube-proxy
+            namespace: kube-system
+            annotations:
+              rkt.alpha.kubernetes.io/stage1-name-override: coreos.com/rkt/stage1-fly
+          spec:
+            hostNetwork: true
+            containers:
+            - name: kube-proxy
+              image: quay.io/coreos/hyperkube:v1.9.0_coreos.0
+              command:
+              - /hyperkube
+              - proxy
+              - --master={{.k8s_controller_endpoint}}
+              - --kubeconfig=/etc/kubernetes/proxy.kubeconfig
+              - --v=2
+              - --cluster-cidr={{.k8s_pod_network}}
+              securityContext:
+                privileged: true
+              volumeMounts:
+                - mountPath: /etc/ssl/certs
+                  name: "ssl-certs"
+                - mountPath: /etc/kubernetes/proxy.kubeconfig
+                  name: "kubeconfig"
+                  readOnly: true
+                - mountPath: /etc/kubernetes/ssl
+                  name: "etc-kube-ssl"
+                  readOnly: true
+                - mountPath: /var/run/dbus
+                  name: dbus
+                  readOnly: false
+            volumes:
+              - name: "ssl-certs"
+                hostPath:
+                  path: "/usr/share/ca-certificates"
+              - name: "kubeconfig"
+                hostPath:
+                  path: "/etc/kubernetes/proxy.kubeconfig"
+              - name: "etc-kube-ssl"
+                hostPath:
+                  path: "/etc/ssl/k8s"
+              - hostPath:
+                  path: /var/run/dbus
+                name: dbus
+    - path: /srv/kubernetes/manifests/kube-node-crb.yaml
+      filesystem: root
+      contents:
+          inline: |
+              apiversion: rbac.authorization.k8s.io/v1beta1
+              kind: ClusterRoleBinding
+              metadata:
+                  name: system:nodes
+              subjects:
+                  - apigroup: rbac.authorization.k8s.io
+                    kind: User
+                    name: system:node
+              roleRef:
+                kind: ClusterRole
+                name: system:node
+                apiGroup: rbac.authorization.k8s.io
+    - path: /srv/kubernetes/manifests/k8s-dash-sa.yaml
+      filesystem: root
+      contents:
+          inline: |
+            apiVersion: v1
+            kind: ServiceAccount
+            metadata:
+              labels:
+                app: kubernetes-dashboard
+              name: kubernetes-dashboard
+              namespace: kube-system
+    - path: /srv/kubernetes/manifests/k8s-dash-crb.yaml
+      filesystem: root
+      contents:
+          inline: |
+            apiVersion: rbac.authorization.k8s.io/v1beta1
+            kind: ClusterRoleBinding
+            metadata:
+              name: kubernetes-dashboard
+              labels:
+                app: kubernetes-dashboard
+            roleRef:
+              apiGroup: rbac.authorization.k8s.io
+              kind: ClusterRole
+              name: cluster-admin
+            subjects:
+            - kind: ServiceAccount
+              name: kubernetes-dashboard
+              namespace: kube-system
+    - path: /srv/kubernetes/manifests/k8s-dash-deploy.yaml
+      filesystem: root
+      contents:
+          inline: |
+            kind: Deployment
+            apiVersion: extensions/v1beta1
+            metadata:
+              labels:
+                app: kubernetes-dashboard
+              name: kubernetes-dashboard
+              namespace: kube-system
+            spec:
+              replicas: 1
+              revisionHistoryLimit: 10
+              selector:
+                matchLabels:
+                  app: kubernetes-dashboard
+              template:
+                metadata:
+                  labels:
+                    app: kubernetes-dashboard
+                spec:
+                  containers:
+                  - name: kubernetes-dashboard
+                    image: gcr.io/google_containers/kubernetes-dashboard-amd64:v1.8.1
+                    imagePullPolicy: Always
+                    ports:
+                    - containerPort: 9090
+                      protocol: TCP
+                    args:
+                    livenessProbe:
+                      httpGet:
+                        path: /
+                        port: 9090
+                      initialDelaySeconds: 30
+                      timeoutSeconds: 30
+                  serviceAccountName: kubernetes-dashboard
+                  tolerations:
+                  - key: node-role.kubernetes.io/master
+                    effect: NoSchedule
+    - path: /srv/kubernetes/manifests/k8s-dash-svc.yaml
+      filesystem: root
+      contents:
+          inline: |
+            kind: Service
+            apiVersion: v1
+            metadata:
+              labels:
+                app: kubernetes-dashboard
+              name: kubernetes-dashboard
+              namespace: kube-system
+            spec:
+              type: NodePort
+              ports:
+              - port: 80
+                targetPort: 9090
+              selector:
+                app: kubernetes-dashboard
+    - path: /srv/kubernetes/manifests/heapster-crb.yaml
+      filesystem: root
+      contents:
+          inline: |
+              kind: ClusterRoleBinding
+              apiVersion: rbac.authorization.k8s.io/v1beta1
+              metadata:
+                  name: heapster
+              subjects:
+              - kind: ServiceAccount
+                name: heapster
+                namespace: kube-system
+              roleRef:
+                kind: ClusterRole
+                name: system:heapster
+                apiGroup: rbac.authorization.k8s.io
+    - path: /srv/kubernetes/manifests/heapster-sa.yaml
+      filesystem: root
+      contents:
+          inline: |
+              apiVersion: v1
+              kind: ServiceAccount
+              metadata:
+                  name: heapster
+                  namespace: kube-system
+                  labels:
+                      kubernetes.io/cluster-service: "true"
+                      addonmanager.kubernetes.io/mode: Reconcile
+    - path: /srv/kubernetes/manifests/heapster-svc.yaml
+      filesystem: root
+      contents:
+        inline: |
+          kind: Service
+          apiVersion: v1
+          metadata:
+            name: heapster
+            namespace: kube-system
+            labels:
+              kubernetes.io/cluster-service: "true"
+              kubernetes.io/name: "Heapster"
+          spec:
+            ports:
+              - port: 80
+                targetPort: 8082
+            selector:
+              k8s-app: heapster
+    - path: /srv/kubernetes/manifests/heapster-deployment.yaml
+      filesystem: root
+      contents:
+        inline: |
+          apiVersion: extensions/v1beta1
+          kind: Deployment
+          metadata:
+            name: heapster-v1.5.0
+            namespace: kube-system
+            labels:
+              k8s-app: heapster
+              kubernetes.io/cluster-service: "true"
+              version: v1.5.0
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                k8s-app: heapster
+                version: v1.5.0
+            template:
+              metadata:
+                labels:
+                  k8s-app: heapster
+                  version: v1.5.0
+                annotations:
+                  scheduler.alpha.kubernetes.io/critical-pod: ''
+                  scheduler.alpha.kubernetes.io/tolerations: '[{"key":"CriticalAddonsOnly", "operator":"Exists"}]'
+              spec:
+                serviceAccountName: heapster
+                containers:
+                  - image: gcr.io/google_containers/heapster:v1.5.0
+                    name: heapster
+                    livenessProbe:
+                      httpGet:
+                        path: /healthz
+                        port: 8082
+                        scheme: HTTP
+                      initialDelaySeconds: 180
+                      timeoutSeconds: 5
+                    command:
+                      - /heapster
+                      - --source=kubernetes.summary_api:''
+                  - image: gcr.io/google_containers/addon-resizer:1.6
+                    name: heapster-nanny
+                    resources:
+                      limits:
+                        cpu: 50m
+                        memory: 90Mi
+                      requests:
+                        cpu: 50m
+                        memory: 90Mi
+                    env:
+                      - name: MY_POD_NAME
+                        valueFrom:
+                          fieldRef:
+                            fieldPath: metadata.name
+                      - name: MY_POD_NAMESPACE
+                        valueFrom:
+                          fieldRef:
+                            fieldPath: metadata.namespace
+                    command:
+                      - /pod_nanny
+                      - --cpu=80m
+                      - --extra-cpu=4m
+                      - --memory=200Mi
+                      - --extra-memory=4Mi
+                      - --threshold=5
+                      - --deployment=heapster-v1.5.0
+                      - --container=heapster
+                      - --poll-period=300000
+                      - --estimator=exponential
+    - path: /srv/kubernetes/manifests/kube-dns-sa.yaml
+      filesystem: root
+      contents:
+          inline: |
+              apiVersion: v1
+              kind: ServiceAccount
+              metadata:
+                  name: kube-dns
+                  namespace: kube-system
+                  labels:
+                      kubernetes.io/cluster-service: "true"
+                      addonmanager.kubernetes.io/mode: Reconcile
+    - path: /srv/kubernetes/manifests/kube-dns-cm.yaml
+      filesystem: root
+      contents:
+          inline: |
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                  name: kube-dns
+                  namespace: kube-system
+                  labels:
+                      addonmanager.kubernetes.io/mode: EnsureExists
+    - path: /srv/kubernetes/manifests/kube-dns-svc.yaml
+      filesystem: root
+      contents:
+        inline: |
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: kube-dns
+            namespace: kube-system
+            labels:
+              k8s-app: kube-dns
+              kubernetes.io/cluster-service: "true"
+              addonmanager.kubernetes.io/mode: Reconcile
+              kubernetes.io/name: "KubeDNS"
+          spec:
+            selector:
+              k8s-app: kube-dns
+            clusterIP: {{.k8s_dns_service_ip}}
+            ports:
+            - name: dns
+              port: 53
+              protocol: UDP
+            - name: dns-tcp
+              port: 53
+              protocol: TCP
+    - path: /srv/kubernetes/manifests/kube-dns-deployment.yaml
+      filesystem: root
+      contents:
+        inline: |
+          apiVersion: extensions/v1beta1
+          kind: Deployment
+          metadata:
+            name: kube-dns
+            namespace: kube-system
+            labels:
+              k8s-app: kube-dns
+              kubernetes.io/cluster-service: "true"
+              addonmanager.kubernetes.io/mode: Reconcile
+          spec:
+            strategy:
+              rollingUpdate:
+                maxSurge: 10%
+                maxUnavailable: 0
+            selector:
+              matchLabels:
+                k8s-app: kube-dns
+            template:
+              metadata:
+                labels:
+                  k8s-app: kube-dns
+                annotations:
+                  scheduler.alpha.kubernetes.io/critical-pod: ''
+                  scheduler.alpha.kubernetes.io/tolerations: '[{"key":"CriticalAddonsOnly", "operator":"Exists"}]'
+              spec:
+                volumes:
+                    - name: kube-dns-config
+                      configMap:
+                          name: kube-dns
+                          optional: true
+                containers:
+                - name: kubedns
+                  image: gcr.io/google_containers/k8s-dns-kube-dns-amd64:1.14.7
+                  resources:
+                    limits:
+                      memory: 170Mi
+                    requests:
+                      cpu: 100m
+                      memory: 70Mi
+                  livenessProbe:
+                    httpGet:
+                      path: /healthcheck/kubedns
+                      port: 10054
+                      scheme: HTTP
+                    initialDelaySeconds: 60
+                    timeoutSeconds: 5
+                    successThreshold: 1
+                    failureThreshold: 5
+                  readinessProbe:
+                    httpGet:
+                      path: /readiness
+                      port: 8081
+                      scheme: HTTP
+                    initialDelaySeconds: 3
+                    timeoutSeconds: 5
+                  args:
+                  - --domain=cluster.local.
+                  - --dns-port=10053
+                  - --config-dir=/kube-dns-config
+                  - --v=2
+                  env:
+                  - name: PROMETHEUS_PORT
+                    value: "10055"
+                  ports:
+                  - containerPort: 10053
+                    name: dns-local
+                    protocol: UDP
+                  - containerPort: 10053
+                    name: dns-tcp-local
+                    protocol: TCP
+                  - containerPort: 10055
+                    name: metrics
+                    protocol: TCP
+                  volumeMounts:
+                      - name: kube-dns-config
+                        mountPath: /kube-dns-config
+                - name: dnsmasq
+                  image: gcr.io/google_containers/k8s-dns-dnsmasq-nanny-amd64:1.14.7
+                  livenessProbe:
+                    httpGet:
+                      path: /healthcheck/dnsmasq
+                      port: 10054
+                      scheme: HTTP
+                    initialDelaySeconds: 60
+                    timeoutSeconds: 5
+                    successThreshold: 1
+                    failureThreshold: 5
+                  args:
+                  - -v=2
+                  - -logtostderr
+                  - -configDir=/etc/k8s/dns/dnsmasq-nanny
+                  - -restartDnsmasq=true
+                  - --
+                  - -k
+                  - --cache-size=1000
+                  - --no-resolv
+                  - --server=/cluster.local/127.0.0.1#10053
+                  - --server=/in-addr.arpa/127.0.0.1#10053
+                  - --server=/ip6.arpa/127.0.0.1#10053
+                  - --server=192.168.1.10
+                  - --log-facility=-
+                  ports:
+                  - containerPort: 53
+                    name: dns
+                    protocol: UDP
+                  - containerPort: 53
+                    name: dns-tcp
+                    protocol: TCP
+                  resources:
+                    requests:
+                      cpu: 150m
+                      memory: 10Mi
+                  volumeMounts:
+                  - name: kube-dns-config
+                    mountPath: /etc/k8s/dns/dnsmasq-nanny
+                - name: sidecar
+                  image: gcr.io/google_containers/k8s-dns-sidecar-amd64:1.14.7
+                  livenessProbe:
+                    httpGet:
+                      path: /metrics
+                      port: 10054
+                      scheme: HTTP
+                    initialDelaySeconds: 60
+                    timeoutSeconds: 5
+                    successThreshold: 1
+                    failureThreshold: 5
+                  args:
+                  - --v=2
+                  - --logtostderr
+                  - --probe=kubedns,127.0.0.1:10053,kubernetes.default.svc.cluster.local,5,A
+                  - --probe=dnsmasq,127.0.0.1:53,kubernetes.default.svc.cluster.local,5,A
+                  ports:
+                  - containerPort: 10054
+                    name: metrics
+                    protocol: TCP
+                  resources:
+                    requests:
+                      cpu: 10m
+                      memory: 20Mi
+                dnsPolicy: Default
+                serviceAccountName: kube-dns
+    - path: /opt/k8s-addons
+      filesystem: root
+      mode: 0544
+      contents:
+        inline: |
+          #!/bin/bash -ex
+          echo "Waiting for Kubernetes API..."
+          until curl --silent "http://127.0.0.1:8080/version"
+          do
+            sleep 5
+          done
+          echo "K8S: node rbac"
+          curl --silent -H "Content-Type: application/yaml" -XPOST -d"$(cat /srv/kubernetes/manifests/kube-node-crb.yaml)" "http://127.0.0.1:8080/apis/rbac.authorization.k8s.io/v1beta1/clusterrolebindings"
+          echo "K8S: DNS addon"
+          curl --silent -H "Content-Type: application/yaml" -XPOST -d"$(cat /srv/kubernetes/manifests/kube-dns-sa.yaml)" "http://127.0.0.1:8080/api/v1/namespaces/kube-system/serviceaccounts"
+          curl --silent -H "Content-Type: application/yaml" -XPOST -d"$(cat /srv/kubernetes/manifests/kube-dns-cm.yaml)" "http://127.0.0.1:8080/api/v1/namespaces/kube-system/configmap"
+          curl --silent -H "Content-Type: application/yaml" -XPOST -d"$(cat /srv/kubernetes/manifests/kube-dns-deployment.yaml)" "http://127.0.0.1:8080/apis/extensions/v1beta1/namespaces/kube-system/deployments"
+          curl --silent -H "Content-Type: application/yaml" -XPOST -d"$(cat /srv/kubernetes/manifests/kube-dns-svc.yaml)" "http://127.0.0.1:8080/api/v1/namespaces/kube-system/services"
+          echo "K8S: Heapster addon"
+          curl --silent -H "Content-Type: application/yaml" -XPOST -d"$(cat /srv/kubernetes/manifests/heapster-deployment.yaml)" "http://127.0.0.1:8080/apis/extensions/v1beta1/namespaces/kube-system/deployments"
+          curl --silent -H "Content-Type: application/yaml" -XPOST -d"$(cat /srv/kubernetes/manifests/heapster-sa.yaml)" "http://127.0.0.1:8080/api/v1/namespaces/kube-system/serviceaccounts"
+          curl --silent -H "Content-Type: application/yaml" -XPOST -d"$(cat /srv/kubernetes/manifests/heapster-svc.yaml)" "http://127.0.0.1:8080/api/v1/namespaces/kube-system/services"
+          curl --silent -H "Content-Type: application/yaml" -XPOST -d"$(cat /srv/kubernetes/manifests/heapster-crb.yaml)" "http://127.0.0.1:8080/apis/rbac.authorization.k8s.io/v1beta1/clusterrolebindings"
+          echo "K8S: Dashboard addon"
+          curl --silent -H "Content-Type: application/yaml" -XPOST -d"$(cat /srv/kubernetes/manifests/k8s-dash-sa.yaml)" "http://127.0.0.1:8080/api/v1/namespaces/kube-system/serviceaccounts"
+          curl --silent -H "Content-Type: application/yaml" -XPOST -d"$(cat /srv/kubernetes/manifests/k8s-dash-deploy.yaml)" "http://127.0.0.1:8080/apis/extensions/v1beta1/namespaces/kube-system/deployments"
+          curl --silent -H "Content-Type: application/yaml" -XPOST -d"$(cat /srv/kubernetes/manifests/k8s-dash-svc.yaml)" "http://127.0.0.1:8080/api/v1/namespaces/kube-system/services"
+          curl --silent -H "Content-Type: application/yaml" -XPOST -d"$(cat /srv/kubernetes/manifests/k8s-dash-crb.yaml)" "http://127.0.0.1:8080/apis/rbac.authorization.k8s.io/v1beta1/clusterrolebindings"
+{{ if index . "ssh_authorized_keys" }}
+passwd:
+  users:
+    - name: core
+      ssh_authorized_keys:
+        {{ range $element := .ssh_authorized_keys }}
+        - {{$element}}
+        {{end}}
+{{end}}

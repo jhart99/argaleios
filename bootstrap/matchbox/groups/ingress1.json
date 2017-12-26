@@ -1,0 +1,24 @@
+{
+  "id": "ingress1",
+  "name": "ingress1",
+  "profile": "etcd3-ingress",
+  "selector": {
+    "mac": "00:02:c9:53:70:c2",
+    "os": "installed"
+  },
+  "metadata": {
+    "container_runtime": "docker",
+    "domain_name": "ingress1.vogt.local",
+    "etcd_name": "ingress1",
+    "etcd_initial_cluster": "controller1=https://controller1.vogt.local:2380,controller2=https://controller2.vogt.local:2380,controller3=https://controller3.vogt.local:2380,controller4=https://controller4.vogt.local:2380,controller5=https://controller5.vogt.local:2380",
+    "internal_ip": "192.168.10.7/24",
+    "flannel_ip": "192.168.10.7",
+    "public_ip": "137.131.92.217/22",
+    "k8s_controller_endpoint": "https://vogt1005.scripps.edu:6443",
+    "k8s_dns_service_ip": "10.3.0.10",
+    "etcd_endpoints": "https://controller1.vogt.local:2379,https://controller2.vogt.local:2379,https://controller3.vogt.local:2379,https://controller4.vogt.local:2379,https://controller5.vogt.local:2379",
+    "k8s_pod_network": "10.2.0.0/16",
+    "k8s_service_ip_range": "10.3.0.0/24",
+    "ssh_authorized_keys": ["ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCpYtkqsh9IIspMwmoS/4+ttpCqy4HDAgrX0wn/VJ7lyd9UmJ9tLjCBoZJpKcjpw2LUvMY8bxvLR728dkqies8UgQy2TvKnGa9HaPerMpo0+zdp8R0XFAcEgdsUdmyZeUIOjP1OyUWdfUOdkK6gP0144o1az+u8F1tBzybpdKBxofWaCW3C/oza7xUa9WTYaaCa6MGIDW7ywgc3N5JZJG3T55u/lBNhL76nmd2XiyOmhSYU61Muh0SYjoXo7DG2RRpb3/T8SF0iX4tczmPLT/xDmg4MF3F0p+5PiF7SuU0XrmqSERVqg2P1RCJkqDyDHh4WEhKtS3MjX8M8ffONVNHt jhart@desktopjh.scripps.edu"]
+  }
+}

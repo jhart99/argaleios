@@ -1,0 +1,366 @@
+---
+systemd:
+  units:
+    - name: network-functioning.service
+      contents: |
+        [Unit]
+        Description=Make sure network is actually configured
+
+        [Service]
+        EnvironmentFile=-/etc/environment
+        ExecStartPre=/bin/bash -c 'until [ $(hostname -s) != localhost ]; do sleep 5; done'
+        ExecStart=/bin/bash -c "while [ $(hostname -s) != localhost ]; do sleep 60; done"
+        Restart=always
+        RestartSec=60
+    - name: flanneld.service
+      dropins:
+          - name: 40-add-options.conf
+            contents: |
+                [Service]
+                EnvironmentFile=-/etc/flannel/options.env
+    - name: docker.service
+      dropins:
+          - name: 40-flannel.conf
+            contents: |
+                [Unit]
+                Requires=flanneld.service
+                After=flanneld.service
+                [Service]
+                EnvironmentFile=/etc/kubernetes/cni/docker_opts_cni.env
+    - name: nfs-client.target
+      enable: true
+      dropins:
+          - name: 00-nfs.conf
+            contents: |
+                [Unit]
+                Wants=rpc-statd.service
+    - name: etcd-member.service
+      enable: true
+      dropins:
+        - name: 40-etcd-cluster.conf
+          contents: |
+            [Unit]
+            Wants=etcd-assets.target
+            Wants=network-functioning.service
+            After=network-functioning.service
+            [Service]
+            Environment="ETCD_IMAGE_TAG=v3.2.11"
+            Environment="ETCD_NAME=%H"
+            Environment="ETCD_LISTEN_CLIENT_URLS=http://127.0.0.1:2379"
+            Environment="ETCD_INITIAL_CLUSTER={{.etcd_initial_cluster}}"
+            Environment="ETCD_CERT_FILE=/etc/ssl/certs/etcd-peer.pem"
+            Environment="ETCD_KEY_FILE=/etc/ssl/certs/etcd-peer-key.pem"
+            Environment="ETCD_TRUSTED_CA_FILE=/etc/ssl/certs/etcd-ca.pem"
+            Environment="ETCD_PEER_CERT_FILE=/etc/ssl/certs/etcd-peer.pem"
+            Environment="ETCD_PEER_KEY_FILE=/etc/ssl/certs/etcd-peer-key.pem"
+            Environment="ETCD_PEER_TRUSTED_CA_FILE=/etc/ssl/certs/etcd-ca.pem"
+            Environment="ETCD_SSL_DIR=/etc/ssl/etcd"
+            Environment="ETCD_PROXY=on"
+            ExecStart=
+            ExecStart=/bin/bash -c "ETCD_NAME=$(hostname) /usr/lib/coreos/etcd-wrapper $ETCD_OPTS"
+            Restart=always
+            RestartSec=3
+    - name: locksmithd.service
+      dropins:
+        - name: 40-etcd-lock.conf
+          contents: |
+            [Service]
+            Environment="REBOOT_STRATEGY=etcd-lock"
+        - name: 10-etcd-tls.conf
+          contents: |
+            [Service]
+            Environment="LOCKSMITHD_ETCD_CAFILE=/etc/ssl/etcd/etcd-ca.pem"
+            Environment="LOCKSMITHD_ETCD_CERTFILE=/etc/ssl/etcd/etcd-client.pem"
+            Environment="LOCKSMITHD_ETCD_KEYFILE=/etc/ssl/etcd/etcd-client-key.pem"
+            Environment="LOCKSMITHD_ENDPOINT={{.etcd_endpoints}}"
+    - name: fleet.service
+      enable: true
+      dropins:
+        - name: 10-etcd-tls.conf
+          contents: |
+            [Unit]
+            After=etcd-member.service
+            Wants=fleet-assets.target
+            After=fleet-assets.target
+            [Service]
+            Environment="FLEET_ETCD_SERVERS=http://127.0.0.1:2379"
+        - name: 20-metadata.conf
+          contents: |
+            [Service]
+            ExecStart=
+            ExecStart=/bin/bash -c "FLEET_METADATA=hostname=$(hostname) /usr/bin/fleetd"
+    - name: kubelet.service
+      enable: true
+      contents: |
+        [Unit]
+        Description=Kubelet via Hyperkube ACI
+        Wants=flanneld.service
+        Requires=k8s-assets.target
+        After=k8s-assets.target
+        [Service]
+        Environment=KUBELET_VERSION=v1.9.0_coreos.0
+        Environment="RKT_OPTS=--uuid-file-save=/var/run/kubelet-pod.uuid \
+          --volume dns,kind=host,source=/etc/resolv.conf \
+          --mount volume=dns,target=/etc/resolv.conf \
+          {{ if eq .container_runtime "rkt" -}}
+          --volume rkt,kind=host,source=/opt/bin/host-rkt \
+          --mount volume=rkt,target=/usr/bin/rkt \
+          --volume var-lib-rkt,kind=host,source=/var/lib/rkt \
+          --mount volume=var-lib-rkt,target=/var/lib/rkt \
+          --volume stage,kind=host,source=/tmp \
+          --mount volume=stage,target=/tmp \
+          {{ end -}}
+          --volume var-log,kind=host,source=/var/log \
+          --mount volume=var-log,target=/var/log"
+        ExecStartPre=/usr/bin/mkdir -p /etc/kubernetes/manifests
+        ExecStartPre=/usr/bin/mkdir -p /var/log/containers
+        ExecStartPre=/usr/bin/systemctl is-active flanneld.service
+        ExecStartPre=-/usr/bin/rkt rm --uuid-file=/var/run/kubelet-pod.uuid
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/kubernetes/kubeconfig ] || curl -s -L http://matchbox.foo:8080/assets/worker.kubeconfig | sed s/XXX/$(/usr/bin/hostname)/ > /etc/kubernetes/kubeconfig"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/kubernetes/proxy.kubeconfig ] || curl -s -L -o /etc/kubernetes/proxy.kubeconfig http://matchbox.foo:8080/assets/proxy.kubeconfig"
+        ExecStartPre=/usr/bin/mkdir -p /etc/kubernetes/ssl
+        ExecStartPre=/usr/bin/bash -c "/usr/bin/cp /etc/ssl/k8s/* /etc/kubernetes/ssl"
+        ExecStart=/usr/lib/coreos/kubelet-wrapper \
+          --allow-privileged=true \
+          --cluster_dns={{.k8s_dns_service_ip}} \
+          --cluster_domain=cluster.local \
+          --cni-conf-dir=/etc/kubernetes/cni/net.d \
+          --container-runtime={{.container_runtime}} \
+          --kubeconfig=/etc/kubernetes/kubeconfig \
+          --network-plugin=cni \
+          --pod-manifest-path=/etc/kubernetes/manifests \
+          --register-node=true \
+          --require-kubeconfig \
+          --rkt-path=/usr/bin/rkt \
+          --rkt-stage1-image=coreos.com/rkt/stage1-coreos \
+          --tls-cert-file=/etc/kubernetes/ssl/peer.pem \
+          --tls-private-key-file=/etc/kubernetes/ssl/peer-key.pem \
+          --v=2
+        ExecStop=-/usr/bin/rkt stop --uuid-file=/var/run/kubelet-pod.uuid
+        Restart=always
+        RestartSec=10
+        [Install]
+        WantedBy=multi-user.target
+    - name: cfssl.service
+      contents: |
+        [Unit]
+        Description=Fetch cfssl and cfssljson
+        [Service]
+        ExecStartPre=/usr/bin/bash -c "[ -d /opt ] || mkdir /opt"
+        ExecStartPre=/usr/bin/bash -c "[ -f /opt/cfssl ] || curl -s -L -o /opt/cfssl https://pkg.cfssl.org/R1.2/cfssl_linux-amd64"
+        ExecStartPre=/usr/bin/bash -c "[ -f /opt/cfssljson ] || curl -s -L -o /opt/cfssljson https://pkg.cfssl.org/R1.2/cfssljson_linux-amd64"
+        ExecStart=/usr/bin/chmod +x /opt/cfssl /opt/cfssljson
+        Restart=on-failure
+        RestartSec=3
+    - name: etcd-gen@.service
+      contents: |
+        [Unit]
+        Description=Generate Certs and Keys
+        Wants=network-functioning.service
+        After=network-functioning.service
+        [Service]
+        ExecStartPre=/usr/bin/bash -c "[ -d /etc/ssl/etcd/ ] || mkdir /etc/ssl/etcd/"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/etcd/etcd-ca.pem ] || curl -s -L -o /etc/ssl/etcd/etcd-ca.pem http://matchbox.foo:8080/assets/tls/etcd-ca2.pem"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/etcd/%i.json ] || curl -s -L -o /etc/ssl/etcd/%i.json http://matchbox.foo:8080/assets/tls/%i.json"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/etcd/%i.pem ] || /opt/cfssl gencert -hostname \"%H,$(/usr/bin/hostname | cut -d\".\" -f1),$(/usr/bin/host $(/usr/bin/hostname) | /usr/bin/awk '{print $4}'),127.0.0.1\" -profile %i -remote ca.vogt.local:8888 /etc/ssl/etcd/%i.json | /opt/cfssljson -bare /etc/ssl/etcd/%i"
+        ExecStartPre=/bin/chown -R etcd:etcd /etc/ssl/etcd
+        ExecStart=/bin/chmod 600 /etc/ssl/etcd/%i-key.pem
+        Restart=on-failure
+        RestartSec=3
+    - name: fleet-gen@.service
+      contents: |
+        [Unit]
+        Description=Generate Certs and Keys
+        Wants=network-functioning.service
+        After=network-functioning.service
+        [Service]
+        ExecStartPre=/usr/bin/bash -c "[ -d /etc/ssl/fleet/ ] || mkdir /etc/ssl/fleet/"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/fleet/etcd-ca.pem ] || curl -s -L -o /etc/ssl/fleet/etcd-ca.pem http://matchbox.foo:8080/assets/tls/etcd-ca2.pem"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/fleet/%i.json ] || curl -s -L -o /etc/ssl/fleet/%i.json http://matchbox.foo:8080/assets/tls/%i.json"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/fleet/%i.pem ] || /opt/cfssl gencert -hostname \"%H,$(/usr/bin/hostname | cut -d\".\" -f1),$(/usr/bin/host $(/usr/bin/hostname) | /usr/bin/awk '{print $4}'),127.0.0.1\" -profile %i -remote ca.vogt.local:8888 /etc/ssl/fleet/%i.json | /opt/cfssljson -bare /etc/ssl/fleet/%i"
+        ExecStartPre=/bin/chown -R fleet:fleet /etc/ssl/fleet
+        ExecStart=/bin/chmod 600 /etc/ssl/fleet/%i-key.pem
+        Restart=on-failure
+        RestartSec=3
+    - name: k8s-gen@.service
+      contents: |
+        [Unit]
+        Description=Generate Certs and Keys
+        Wants=network-functioning.service
+        After=network-functioning.service
+        [Service]
+        ExecStartPre=/usr/bin/bash -c "[ -d /etc/ssl/k8s/ ] || mkdir /etc/ssl/k8s/"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/k8s/k8s-ca.pem ] || curl -s -L -o /etc/ssl/k8s/k8s-ca.pem http://matchbox.foo:8080/assets/tls/k8s-ca2.pem"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/k8s/%i.json ] || curl -s -L -o /etc/ssl/k8s/%i.json http://matchbox.foo:8080/assets/tls/%i.json && sed -i s/XXX/$(/usr/bin/hostname)/ /etc/ssl/k8s/%i.json"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/k8s/%i.pem ] || /opt/cfssl gencert -hostname \"$(/usr/bin/hostname),$(/usr/bin/hostname -s),$(/usr/bin/host $(/usr/bin/hostname) | /usr/bin/awk '{print $4}'),127.0.0.1,kubernetes.default,10.3.0.1,vogt1005.scripps.edu,137.131.92.171\" -profile %i -remote ca.vogt.local:8889 /etc/ssl/k8s/%i.json | /opt/cfssljson -bare /etc/ssl/k8s/%i"
+        ExecStart=/bin/chmod 600 /etc/ssl/k8s/%i-key.pem
+        Restart=on-failure
+        RestartSec=3
+    - name: k8s-assets.target
+      contents: |
+        [Unit]
+        Description=Generate etcd certs and secrets
+        Wants=cfssl.service
+        Wants=k8s-gen@peer.service
+    - name: etcd-assets.target
+      contents: |
+        [Unit]
+        Description=Generate etcd certs and secrets
+        Wants=cfssl.service
+        Wants=etcd-gen@etcd-client.service
+        Wants=etcd-gen@etcd-peer.service
+    - name: fleet-assets.target
+      contents: |
+        [Unit]
+        Description=Generate etcd certs and secrets
+        Wants=cfssl.service
+        Wants=fleet-gen@client.service
+storage:
+  {{ if index . "pxe" }}
+  disks:
+    - device: /dev/sda
+      wipe_table: true
+      partitions:
+        - label: ROOT
+  filesystems:
+    - name: root
+      mount:
+        device: "/dev/sda1"
+        format: "ext4"
+        create:
+          force: true
+          options:
+            - "-LROOT"
+  {{ end }}
+  files:
+    - path: /etc/kubernetes/cni/net.d/10-flannel.conf
+      filesystem: root
+      contents:
+        inline: |
+          {
+              "name": "podnet",
+              "type": "flannel",
+              "delegate": {
+                  "isDefaultGateway": true
+              }
+          }
+    - path: /etc/kubernetes/cni/docker_opts_cni.env
+      filesystem: root
+      contents:
+        inline: |
+          DOCKER_OPT_BIP=""
+          DOCKER_OPT_IPMASQ=""
+    - path: /etc/sysctl.d/max-user-watches.conf
+      filesystem: root
+      contents:
+        inline: |
+          fs.inotify.max_user_watches=16184
+    - path: /etc/kubernetes/worker-kubeconfig.yaml
+      filesystem: root
+      contents:
+        inline: |
+          apiVersion: v1
+          kind: Config
+          clusters:
+          - name: local
+            cluster:
+              certificate-authority: /etc/ssl/k8s/k8s-ca.pem
+          users:
+          - name: kubelet
+            user:
+              client-certificate: /etc/ssl/k8s/peer.pem
+              client-key: /etc/ssl/k8s/peer-key.pem
+          contexts:
+          - context:
+              cluster: local
+              user: kubelet
+            name: kubelet-context
+          current-context: kubelet-context
+    - path: /etc/kubernetes/manifests/kube-proxy.yaml
+      filesystem: root
+      contents:
+        inline: |
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: kube-proxy
+            namespace: kube-system
+            annotations:
+              rkt.alpha.kubernetes.io/stage1-name-override: coreos.com/rkt/stage1-fly
+          spec:
+            hostNetwork: true
+            containers:
+            - name: kube-proxy
+              image: quay.io/coreos/hyperkube:v1.9.0_coreos.0
+              command:
+              - /hyperkube
+              - proxy
+              - --master={{.k8s_controller_endpoint}}
+              - --kubeconfig=/etc/kubernetes/proxy.kubeconfig
+              - --v=2
+              - --cluster-cidr={{.k8s_pod_network}}
+              securityContext:
+                privileged: true
+              volumeMounts:
+                - mountPath: /etc/ssl/certs
+                  name: "ssl-certs"
+                - mountPath: /etc/kubernetes/proxy.kubeconfig
+                  name: "kubeconfig"
+                  readOnly: true
+                - mountPath: /etc/kubernetes/ssl
+                  name: "etc-kube-ssl"
+                  readOnly: true
+                - mountPath: /var/run/dbus
+                  name: dbus
+                  readOnly: false
+            volumes:
+              - name: "ssl-certs"
+                hostPath:
+                  path: "/usr/share/ca-certificates"
+              - name: "kubeconfig"
+                hostPath:
+                  path: "/etc/kubernetes/proxy.kubeconfig"
+              - name: "etc-kube-ssl"
+                hostPath:
+                  path: "/etc/ssl/k8s"
+              - hostPath:
+                  path: /var/run/dbus
+                name: dbus
+    - path: /etc/flannel/options.env
+      filesystem: root
+      contents:
+        inline: |
+          ETCDCTL_CA_FILE=/etc/ssl/etcd/etcd-ca.pem
+          ETCDCTL_CERT_FILE=/etc/ssl/etcd/etcd-peer.pem
+          ETCDCTL_KEY_FILE=/etc/ssl/etcd/etcd-peer-key.pem
+          ETCDCTL_ENDPOINTS={{.etcd_endpoints}}
+          FLANNELD_ETCD_ENDPOINTS={{.etcd_endpoints}}
+          FLANNELD_ETCD_CAFILE=/etc/ssl/etcd/etcd-ca.pem
+          FLANNELD_ETCD_CERTFILE=/etc/ssl/etcd/etcd-peer.pem
+          FLANNELD_ETCD_KEYFILE=/etc/ssl/etcd/etcd-peer-key.pem
+    {{ if eq .container_runtime "rkt" }}
+    - path: /opt/bin/host-rkt
+      filesystem: root
+      mode: 0544
+      contents:
+        inline: |
+          #!/bin/sh
+          # This is bind mounted into the kubelet rootfs and all rkt shell-outs go
+          # through this rkt wrapper. It essentially enters the host mount namespace
+          # (which it is already in) only for the purpose of breaking out of the chroot
+          # before calling rkt. It makes things like rkt gc work and avoids bind mounting
+          # in certain rkt filesystem dependancies into the kubelet rootfs. This can
+          # eventually be obviated when the write-api stuff gets upstream and rkt gc is
+          # through the api-server. Related issue:
+          # https://github.com/coreos/rkt/issues/2878
+          exec nsenter -m -u -i -n -p -t 1 -- /usr/bin/rkt "$@"
+    {{ end }}
+{{ if index . "ssh_authorized_keys" }}
+passwd:
+  users:
+    - name: core
+      ssh_authorized_keys:
+        {{ range $element := .ssh_authorized_keys }}
+        - {{$element}}
+        {{end}}
+{{end}}

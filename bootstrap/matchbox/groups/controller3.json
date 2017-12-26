@@ -1,0 +1,23 @@
+{
+  "id": "controller3",
+  "name": "controller3",
+  "profile": "etcd3",
+  "selector": {
+    "mac": "18:a9:05:c5:fa:66",
+    "os": "installed"
+  },
+  "metadata": {
+    "container_runtime": "docker",
+    "domain_name": "controller3.vogt.local",
+    "etcd_name": "controller3",
+    "etcd_initial_cluster": "controller1=https://controller1.vogt.local:2380,controller2=https://controller2.vogt.local:2380,controller3=https://controller3.vogt.local:2380,controller4=https://controller4.vogt.local:2380,controller5=https://controller5.vogt.local:2380",
+    "k8s_controller_endpoint": "https://vogt1005.scripps.edu:6443",
+    "k8s_cert_endpoint": "http://matchbox.foo:8080/assets",
+    "k8s_dns_service_ip": "10.3.0.10",
+    "etcd_endpoints": "https://controller1.vogt.local:2379,https://controller2.vogt.local:2379,https://controller3.vogt.local:2379,https://controller4.vogt.local:2379,https://controller5.vogt.local:2379",
+    "k8s_api_endpoints": "https://controller1.vogt.local:443,https://controller2.vogt.local:443,https://controller3.vogt.local:443,https://controller4.vogt.local:443,https://controller5.vogt.local:443",
+    "k8s_pod_network": "10.2.0.0/16",
+    "k8s_service_ip_range": "10.3.0.0/24",
+    "ssh_authorized_keys": ["ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCpYtkqsh9IIspMwmoS/4+ttpCqy4HDAgrX0wn/VJ7lyd9UmJ9tLjCBoZJpKcjpw2LUvMY8bxvLR728dkqies8UgQy2TvKnGa9HaPerMpo0+zdp8R0XFAcEgdsUdmyZeUIOjP1OyUWdfUOdkK6gP0144o1az+u8F1tBzybpdKBxofWaCW3C/oza7xUa9WTYaaCa6MGIDW7ywgc3N5JZJG3T55u/lBNhL76nmd2XiyOmhSYU61Muh0SYjoXo7DG2RRpb3/T8SF0iX4tczmPLT/xDmg4MF3F0p+5PiF7SuU0XrmqSERVqg2P1RCJkqDyDHh4WEhKtS3MjX8M8ffONVNHt jhart@desktopjh.scripps.edu"]
+  }
+}
