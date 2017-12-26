@@ -21,24 +21,53 @@ the state of the cluster directly or read any part of the current
 state.  Essentially etcd certificates are admin users in kubernetes.
 Because of this etcd certificates are kept seperate.
 '''
-cfssl gencert -ca=root-ca.pem -ca-key=root-ca-key.pem \
-    -config=root_ca-config.json -profile=signing \
-	etcd-ca.json | cfssljson -bare etcd-ca
-
-cfssl gencert -ca=root-ca.pem -ca-key=root-ca-key.pem \
-    -config=root_ca-config.json -profile=signing \
-	k8s-ca.json | cfssljson -bare k8s-ca
+cfssl gencert -initca etcd-ca.json | cfssljson -bare etcd-ca
+cfssl sign -ca root_ca.pem -ca-key root_ca-key.pem \
+	-config root_ca-config.json etcd-ca.csr \
+	| cfssljson -bare etcd-ca
+cfssl gencert -initca k8s-ca.json | cfssljson -bare k8s-ca
+cfssl sign -ca root_ca.pem -ca-key root_ca-key.pem \
+	-config root_ca-config.json k8s-ca.csr \
+	| cfssljson -bare k8s-ca
 '''
 
 ## Generate the admin kubernetes Certificate
 This certificate will be used to authenticate an administrator with
-the cluster for kubectl. The important part of this configuration is that the admin user has a "O" of "system:masters" which will allow it to do anything in kubernetes.
+the cluster for kubectl. The important part of this configuration is
+that the admin user has a "O" of "system:masters" which will allow it
+to do anything in kubernetes.
 
 '''
 cfssl gencert -ca=k8s-ca.pem -ca-key=k8s-ca-key.pem \
 	-config=ca-config.json -profile=peer \
 	admin.json | cfssljson -bare admin
 '''
+
+## Kubernetes component certificates
+We need a series of certificates to bootstrap kubernetes itself.
+Specifically we need certificates for the kubernetes apiserver and
+kube-proxy.  Once these are in place, kubernetes itself can issue the
+rest of the certificates it needs.  Kube-proxy is completely
+straightforward and the only trick is that it needs its own special
+"O" of "system:node-proxier" and a "CN" of "system:kube-proxy"
+
+'''
+cfssl gencert -ca=k8s-ca.pem -ca-key=k8s-ca-key.pem \
+	-config=ca-config.json -profile=peer \
+	kube-proxy.json | cfssljson -bare kube-proxy
+'''
+
+The apiserver on the other hand is much more involved. It also has its
+own special "O" of "Kubernetes" and a "CN" of "kubernetes". However
+for kubelets, kubectl and everything else to trust it, it must have
+SANs for every possible hostname and IP address it can be accessed on.
+This will include its public facing addressi(es), its public domain
+name(if any), its internal domain name(kubernetes.default), its FQDN
+for the cluster(kubernetes.default.svc.cluster.local), its internal
+IPs(one for each server you plan to run the apiserver on), its
+internal domain names both short and FQDN, and its internal proxied ip
+address (10.3.0.1). These are generated on the nodes themselves as
+part of the cloud config and then signed by k8s-ca remotely.
 
 ## Kubernetes Node certificates
 In a departure from the kubernetes-the-hard-way, I think a better way
