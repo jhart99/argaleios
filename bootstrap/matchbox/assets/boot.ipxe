@@ -1,0 +1,17 @@
+#!ipxe
+#
+echo "entering bootup"
+# Global variables used by all other iPXE scripts
+chain --autofree boot.ipxe.cfg ||
+
+# Look for a host specific chain file
+isset ${hostname} && chain ${boot-dir}hostname-${hostname}.ipxe ||
+
+# Look for a uuid specific chain file
+isset ${uuid} && chain ${boot-dir}uuid-${uuid}.ipxe ||
+
+# Look for a mac chain file
+chain ${boot-dir}mac-${mac:hexraw}.ipxe ||
+
+# Boot <boot-url>/menu.ipxe script if all other options have been exhausted
+chain ${menu-url} ||
