@@ -1,0 +1,7 @@
+[Match]
+Name=enp13s0
+
+[Network]
+VLAN=enp13s0.10
+VLAN=enp13s0.20
+VLAN=enp13s0.30

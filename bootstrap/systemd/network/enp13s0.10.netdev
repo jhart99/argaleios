@@ -1,0 +1,6 @@
+[NetDev]
+Name=enp13s0.10
+Kind=vlan
+
+[VLAN]
+Id=10

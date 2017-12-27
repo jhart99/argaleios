@@ -1,0 +1,8 @@
+[Match]
+Name=enp13s0.10
+
+[Network]
+VLAN=enp13s0.10
+Address=192.168.10.1/24
+Destination=192.168.10.0/24
+IPForward=yes

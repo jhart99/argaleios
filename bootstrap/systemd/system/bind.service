@@ -8,7 +8,7 @@ Restart=always
 RestartSec=3s
 ExecStartPre=-/usr/bin/docker kill bind9
 ExecStartPre=-/usr/bin/docker rm bind9
-ExecStart=/usr/bin/docker run --name=bind9 --rm --network=virt --ip=192.168.1.10 -v /etc/matchbox/bind.forwarding:/etc/bind bind
+ExecStart=/usr/bin/docker run --name=bind9 --rm --network=virt --ip=192.168.1.10 -v /etc/argaleios/bootstrap/bind:/etc/bind bind
 
 [Install]
 WantedBy=multi-user.target

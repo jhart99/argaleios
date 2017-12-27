@@ -1,0 +1,7 @@
+[Match]
+Name=enp13s0.20
+
+[Network]
+VLAN=enp13s0.20
+Address=192.168.20.1/24
+Destination=192.168.20.0/24

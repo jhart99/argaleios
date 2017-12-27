@@ -1,0 +1,10 @@
+[Match]
+Name=enp1s0f0
+
+[Network]
+Address=137.131.92.171/22
+Gateway=137.131.92.1
+Destination=0.0.0.0/0
+DNS=137.131.40.9
+IPForward=yes
+IPMasquerade=yes
