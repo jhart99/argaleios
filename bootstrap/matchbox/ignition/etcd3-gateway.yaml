@@ -182,6 +182,20 @@ systemd:
         ExecStart=/bin/chmod 600 /etc/ssl/fleet/%i-key.pem
         Restart=on-failure
         RestartSec=3
+    - name: k8s-gen-proxy@.service
+      contents: |
+        [Unit]
+        Description=Generate kube-proxy Certs and Keys
+        Wants=network-functioning.service
+        After=network-functioning.service
+        [Service]
+        ExecStartPre=/usr/bin/bash -c "[ -d /etc/ssl/k8s/ ] || mkdir /etc/ssl/k8s/"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/k8s/k8s-ca.pem ] || curl -s -L -o /etc/ssl/k8s/k8s-ca.pem http://matchbox.foo:8080/assets/tls/k8s-ca2.pem"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/k8s/%i.json ] || curl -s -L -o /etc/ssl/k8s/%i.json http://matchbox.foo:8080/assets/tls/%i.json && sed -i s/XXX/$(/usr/bin/hostname)/ /etc/ssl/k8s/%i.json"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/k8s/%i.pem ] || /opt/cfssl gencert -profile %i -remote ca.vogt.local:8889 /etc/ssl/k8s/%i.json | /opt/cfssljson -bare /etc/ssl/k8s/%i"
+        ExecStart=/bin/chmod 600 /etc/ssl/k8s/%i-key.pem
+        Restart=on-failure
+        RestartSec=3
     - name: k8s-gen@.service
       contents: |
         [Unit]
@@ -202,6 +216,7 @@ systemd:
         Description=Generate etcd certs and secrets
         Wants=cfssl.service
         Wants=k8s-gen@peer.service
+        Wants=k8s-gen-proxy@proxy.service
     - name: etcd-assets.target
       contents: |
         [Unit]
@@ -276,6 +291,16 @@ storage:
               user: kubelet
             name: kubelet-context
           current-context: kubelet-context
+    - path: /etc/kubernetes/kube-proxy-config.yaml
+      filesystem: root
+      contents:
+        inline: |
+          apiVersion: kubeproxy.config.k8s.io/v1alpha1
+          kind: KubeProxyConfiguration
+          clientConnection:
+            kubeconfig: "/etc/kubernetes/proxy.kubeconfig"
+          mode: "iptables"
+          clusterCIDR: {{.k8s_pod_network}}
     - path: /etc/kubernetes/manifests/kube-proxy.yaml
       filesystem: root
       contents:
@@ -295,15 +320,16 @@ storage:
               command:
               - /hyperkube
               - proxy
-              - --master={{.k8s_controller_endpoint}}
-              - --kubeconfig=/etc/kubernetes/proxy.kubeconfig
+              - --config=/etc/kubernetes/kube-proxy-config.yaml
               - --v=2
-              - --cluster-cidr={{.k8s_pod_network}}
               securityContext:
                 privileged: true
               volumeMounts:
                 - mountPath: /etc/ssl/certs
                   name: "ssl-certs"
+                - mountPath: /etc/kubernetes/kube-proxy-config.yaml
+                  name: "proxyconfig"
+                  readOnly: true
                 - mountPath: /etc/kubernetes/proxy.kubeconfig
                   name: "kubeconfig"
                   readOnly: true
@@ -317,6 +343,9 @@ storage:
               - name: "ssl-certs"
                 hostPath:
                   path: "/usr/share/ca-certificates"
+              - name: "proxyconfig"
+                hostPath:
+                  path: "/etc/kubernetes/kube-proxy-config.yaml"
               - name: "kubeconfig"
                 hostPath:
                   path: "/etc/kubernetes/proxy.kubeconfig"

@@ -40,6 +40,16 @@
                     "content committment"
                 ]
             },
+            "proxy": {
+                "expiry": "43800h",
+                "usages": [
+                    "signing",
+                    "key encipherment",
+                    "server auth",
+                    "client auth",
+                    "content committment"
+                ]
+            },
             "peer": {
                 "expiry": "43800h",
                 "usages": [
