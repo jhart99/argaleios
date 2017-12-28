@@ -69,6 +69,18 @@ internal domain names both short and FQDN, and its internal proxied ip
 address (10.3.0.1). These are generated on the nodes themselves as
 part of the cloud config and then signed by k8s-ca remotely.
 
+## Kubernetes service key
+Services are verified using special bearer tokens signed by the
+service key.  This service key appears in both the controller manager
+and the apiserver and it is ESSENTIAL that this key is identical
+everywhere as it doesn't use a CA to verify the tokens.  Tokens are
+verified using the signing key itself.  To generate this key, just
+make a raw RSA key and serve it to the controller nodes.
+
+'''
+openssl genrsa -out service.pem 2048
+'''
+
 ## Kubernetes Node certificates
 In a departure from the kubernetes-the-hard-way, I think a better way
 is for the nodes to generate their own private keys and then have

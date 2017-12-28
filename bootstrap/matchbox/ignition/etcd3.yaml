@@ -194,6 +194,7 @@ systemd:
         [Service]
         ExecStartPre=/usr/bin/bash -c "[ -d /etc/ssl/k8s/ ] || mkdir /etc/ssl/k8s/"
         ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/k8s/k8s-ca.pem ] || curl -s -L -o /etc/ssl/k8s/k8s-ca.pem http://matchbox.foo:8080/assets/tls/k8s-ca2.pem"
+        ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/k8s/service.pem ] || curl -s -L -o /etc/ssl/k8s/service.pem http://matchbox.foo:8080/assets/tls/service.pem"
         ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/k8s/%i.json ] || curl -s -L -o /etc/ssl/k8s/%i.json http://matchbox.foo:8080/assets/tls/%i.json && sed -i s/XXX/$(/usr/bin/hostname)/ /etc/ssl/k8s/%i.json"
         ExecStartPre=/usr/bin/bash -c "[ -f /etc/ssl/k8s/%i.pem ] || /opt/cfssl gencert -hostname \"{{.etcd_name}},{{.domain_name}},$(/usr/bin/host {{.domain_name}} | /usr/bin/awk '{print $4}'),127.0.0.1,kubernetes.default,kubernetes.default.svc,kubernetes.default.svc.cluster.local,10.3.0.1,vogt1005.scripps.edu,137.131.92.171,137.131.92.217,137.131.92.221,137.131.92.223,rnatr.com\" -profile %i -remote ca.vogt.local:8889 /etc/ssl/k8s/%i.json | /opt/cfssljson -bare /etc/ssl/k8s/%i"
         ExecStart=/bin/chmod 600 /etc/ssl/k8s/%i-key.pem
@@ -328,7 +329,7 @@ storage:
               - --kubelet-https=true
               - --runtime-config=rbac.authorization.k8s.io/v1alpha1
               - --secure-port=443
-              - --service-account-key-file=/etc/kubernetes/ssl/peer-key.pem
+              - --service-account-key-file=/etc/kubernetes/ssl/service.pem
               - --service-cluster-ip-range={{.k8s_service_ip_range}}
               - --service-node-port-range=30000-32767
               - --tls-cert-file=/etc/kubernetes/ssl/peer.pem
@@ -423,7 +424,7 @@ storage:
               - --leader-elect=true
               - --master=http://127.0.0.1:8080
               - --root-ca-file=/etc/kubernetes/ssl/k8s-ca.pem
-              - --service-account-private-key-file=/etc/kubernetes/ssl/peer-key.pem
+              - --service-account-private-key-file=/etc/kubernetes/ssl/service.pem
               - --service-cluster-ip-range={{.k8s_service_ip_range}}
               - --v=2
               resources:
